@@ -1,0 +1,564 @@
+---
+title: "Polygenic Score Analysis"
+author: "Katherine Tansey"
+date: "6 December 2016"
+output:
+  html_document:
+    depth: 4
+    theme: united
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+  word_document:
+    toc: yes
+---
+
+# Introduction
+Complex human traits and disease are highly polygenic, meaning there are multiple different genetic risk loci for each trait/disease. For some of traits/diseases, some of these loci are shared across them, meaning that a genetic risk loci for one trait also increases risk for another trait. This sharing of loci can be quantify on mass across the entire genome, informing of the total genetic risk shared between two traits.  There are a variety of different methods to do this on aggregate across the genome, each with their own strengths and weakenesses. This will focus on only one method : Polygenic Risk Scoring     
+
+# Polygenic Scoring     
+Polygenic risk scoring (PRS) (also known as genetic risk scoring (GRS), risk polygenic scoring (RPS), allelic scoring) is a method that essentially takes the genetic association results from one dataset and “predicts” the phenotype in an independent dataset. Or it is a method of determing if the alleles increasing risk for one trait also increase risk for another trait (or the same trait if undertaken validation). Or as google tells us, polygenic risk scoring is a sum of trait-associated alleles across many genetic loci, typically weighted by effect sizes estimated from a genome-wide association study. Polygenic scores represent the cumlative independent additive genetic effects from the discovery dataset in the target dataset. Therefore, if the discovery dataset is genome-wide association summary statistics for type 2 diabetes, than in your target dataset (your study population), the polygenic score represents the amount of genetic risk the individuals in your dataset carry for type 2 diabetes.     
+     
+Polygenic risk scoring was first description by the [International Schizophrenia Consortium](http://www.nature.com/nature/journal/v460/n7256/full/nature08185.html), a good review on the general principles can be found [here](http://onlinelibrary.wiley.com/doi/10.1111/jcpp.12295/full), and a great paper on the limitations and potentially biases can be found [here](http://www.nature.com/nrg/journal/v14/n7/full/nrg3457.html).   
+     
+     
+* Pros :      
+    + Easy and straightforward to do.  
+    + Power comes mostly from the discovery dataset, meaning if the discovery dataset is powerful enough, power can be achieved even if the target data is small.    
+* Cons :    
+    + Discovery and target dataset **MUST** be completely independent. There can be **NO** sample overlap at all. This can be hard, especially when using discovery datasets from large consortiums who used widely available public control datasets.   
+    + Discovery datasets require genome-wide genotyping data.   
+    + Cryptic relatedness can still inflate R^2^, even when close relatives are excluded.    
+    + R^2^ does not equal genetic correlation, and care must be taken in wrongly interpreting the results in this way. There are many different types of R^2^, particularly when using logistic regressions, they are not interchangeable and can lead to different results ([for more information](http://www.ats.ucla.edu/stat/mult_pkg/faq/general/Psuedo_RSquareds.htm)).    
+
+Polygenic scoring is just the summing of all risk alleles in the target data based on the effect size for that allele from the discovery data (see Figure 1). If the discovery data is a quantitative traits, then Beta values are used as the measure of effect size. If the discovery data is a discrete trait, then the log of the Odds Ratio is used as the measure of effect size. Logging the Odds Ratio is a key step, as Odds Ratios do not have a distribution that is good for use in the polygenic scoring, whereas the log does (natual log is usually used).     
+     
+![](/Users/katherine/Documents/Cardiff_University_Admin/how_tos/polygenic_scoring_howto/scoring_example.png)   
+Figure 1 : Rudimenatary example of how scoring works.   
+     
+        
+Equation for what is happening in Figure 1.   
+![](/Users/katherine/Documents/Cardiff_University_Admin/how_tos/polygenic_scoring_howto/equation.PNG)     
+taken from [here](http://journals.plos.org/plosgenetics/article?id=10.1371/journal.pgen.1003348), where S is the polygenic score, B is the effect size and G is the genotpye.    
+      
+Below is the general steps to take to perform polygenic scoring, however if there is also a software package available that will do this for you called [PRSice](http://prsice.info/).      
+
+This is the general outline of steps  
+![](/Users/katherine/Documents/Cardiff_University_Admin/how_tos/polygenic_scoring_howto/prs_method.png)     
+taken from [here](http://onlinelibrary.wiley.com/doi/10.1111/jcpp.12295/full) with slight modification:   
+
+    1. Identify a Discovery sample with genome-wide association analysis summary statistics.    
+    
+    2. Identify a Target sample with genome-wide genotypes. The Target sample should not include individuals closely related to those in the Discovery sample. Results can be inflated if there is overlap between samples.   
+    
+    3. Determine the list of SNPs in common between Discovery and Target samples.   
+    
+    4. Quality control the Discovery sample genome-wide association analysis summary statistics. Remove low frequency SNPs, low quality variants, indels and the MHC region. 
+    
+    5. Construct a clumped SNP list: association p-value informed removal of correlated SNPs, e.g. LD threshold of r2 < .1 across 500 kb. (e.g. in the program PLINK (Purcell et al., 2007): –clump-p1 1 –clump-p2 1 –clump-r2 0.1 –clump-kb 500). 
+    
+    6. Limit the SNP list to those with association p-value less than a defined threshold (often several thresholds are considered, i.e. <.00001, .0001, .001, .01, .1, .2, .3, etc.).   
+    
+    7. Generate genomic profile scores in the target sample: e.g. sum of risk alleles weighted by Discovery sample effect size, for example, log(odds ratio). (e.g. in PLINK: –score).   
+    
+    8. Regression analysis: y = phenotype, x = profile score. Compare variance explained from the full model (with x) compared to a reduced model (covariates only). Check the sign of the regression coefficient to determine if the relationship between y and x is in the expected direction.   
+    
+    
+There are a variety of places to find discovery sample genome-wide association analysis summary statistics, links are usually included in publications or data can be found on consortium websites.   
+
+## Commands   
+
+### Quality control the discovery sample genome-wide association analysis summary statistics.      
+We want to:      
+
+* Remove any low frequency variants (MAF < 0.1).   
+    + This is to ensure only COMMON SNPs are included. PRS is has not been validated for low frequency, rare or private variants.        
+* Remove low quality variants from imputation (imputaiton INFO<0.9).     
+    + This is to ensure that only robustly imputed SNPs are included in the analysis.           
+* Remove the MHC region.    
+    + The MHC region is a complex region associated with many traits. Because of the high extended and complex LD in the region it can cause complications for polygenic methods and is usually removed from analyses.       
+
+To do this, you need to find specific columns in the discovery dataset (MAF (minor allele frequency), INFO (imputation quality), CHR (chromosome), BP (base position)), you can examine the discovery summary results by running the following code:   
+```{r, eval = FALSE}
+head DISCOVERY_ASSOCIATION_FILE
+```
+Discovery summary files will look different depending on their source, using different column names and with the columns in different orders. Here are some examples:  
+
+hg19chrc |	SNP	       | a1 | a2 | bp	  | info  |	or	    | se	 | pval	  | ngt          
+---------|-------------|----|----|--------|-------|---------|--------|--------|------         
+chr1	 | rs4951859   | C	| G	 | 729679 |	0.631 |	0.97853 | 0.0173 | 0.2083 | 0         
+chr1	 | rs142557973 | T	| C	 | 731718 |	0.665 |	1.01949	| 0.0198 | 0.3298 | 0        
+
+hg19chrc is chromosome column, SNP is the variant, a1 is reference allele, a2 is alternative allele, bp is base position, info is imputation quality, or is the odds ratio, se is the standard error, pval is the p-value and I have no idea what ngt is. There is no MAF column in this dataset. Annoyingly the chromosome column is not just a number but includes a leading 'chr'. This is bad as programs, like plink, will be looking for this to just be a number and will not be able to interpret the column as it is here. You can use this command to change it:   
+
+> awk '{gsub("chr","",$1)}1' FILE > NEW_FILE  
+
+This will change it to be just a number for the chromosome column.      
+ 
+CHR | BP	 | SNP	       | A1 | A2 | BETA	   | SE	    | P    
+----|--------|-------------|----|----|---------|--------|--------    
+1	| 751343 | rs28544273  | A	| T	 | -0.0146 | 0.0338 | 0.6651   
+1	| 751756 | rs143225517 | C	| T	 | -0.0146 | 0.0338	| 0.66     
+
+CHR is chromosome, BP is base position, SNP is the variant, A1 is reference allele, A2 is alternative allele, BETA is the beta value, SE is the standard error, P is the p-value.  There is no INFO column, therefore we **DO NOT** need to remove low quality variants from imputation because we do not have that information.   
+
+MarkerName | Allele1 | Allele2 | Freq.Allele1.HapMapCEU | b       | SE     | p    | N         
+-----------|---------|---------|------------------------|---------|--------|------|--------           
+rs4747841  | A	     | G	   | 0.551	                | -0.0011 |	0.0029 | 0.70 |	253213        
+rs4749917  | T	     | C	   | 0.436	                | 0.0011  |	0.0029 | 0.70 |	253213    
+
+MarkerName is the variant, Allele1 is reference allele, Allele2 is alternative allele, Freq.Allele1.HapMapCEU is the frequency (MAF) of this variant in HapMap european population, b is the beta value, SE is the standard error, p is the p-value, N is the number of individuals with information for this variant. There is no INFO column, therefore we **DO NOT** need to remove low quality variants from imputation because we do not have that information. Annoyingly this dataset does not include chromosome or base position information for the SNPs which makes it difficult to work with.    
+
+SNP        | chr_pos_(b36) | reference_allele |	other_allele | ref_allele_frequency | pvalue   | het_pvalue | log_odds  | log_odds_se |	N_case | N_control | model    
+-----------|---------------|------------------|--------------|----------------------|----------|------------|-----------|-------------|--------|-----------|---------     
+rs12565286 | chr1:711153   | C	              | G	         | .05380729	        | .065121  | .99966894	| .1282012  | .0695073	  | 6659   | 20465	   | FE    
+rs11804171 | chr1:713682   | T	              | A	         | .94596855	        | .0632817 | .99921897	| -.1297868 | .0698828	  | 6017   | 20242 	   | FE     
+
+SNP is the variant, chr_pos_(b36) is the chromosome:base position for genome build b36, reference_allele is the reference allele, other_allele is the alternative allele, ref_allele_frequency is the frequency for the referecen allele, pvalue is the p-value, het_pvalue is the heterogeneity p value, log_odds is the log of the odds ratio, log_odds_se is the log of the standard error of the odds ratio, N_case is the number of cases with information for that marker, N_control is the number of controls with information for that marker, model is the statistic model being reported (FE means a a fixed effect model). Again this dataset does not include an INFO column, therefore we **DO NOT** need to remove low quality variants from imputation because we do not have that information.
+
+This should tell you that it is **IMPORTANT** to look at your data, as the columns that represent the information required will change position and name depending on the input. 
+
+To select information from specific columns, the UNIX awk command will be used. Awk is a powerful command that is incredibly useful. Read more about it [here](https://en.wikipedia.org/wiki/AWK). Awk's format is simple for selection:   
+
+> awk ' (condition) {action} ' FILE > NEW_FILE          
+    
+Condition is what we will be selecting on. For example if we want to select all things in column 2 with a value greater than 3, than the condition would be $2>3.   
+Action is what we want to do. For example, if we want to print all the rows to a new file for the condition above, than the action would be print $0 ($ means ALL rows).   
+So the entire example would be:    
+
+> awk '$2>3 {print $0}' FILE > NEW_FILE     
+
+**This is why it is important to look at your discovery data so you know which columns you want to select for the awk commands.**
+
+How to select only common SNPs (MAF>0.1) if the discovery data has this information. (If it doesn't, don't worry, you can ensure that your target data only includes common markers (MAF>0.1), therefore ensuring that you are only using common markers the target dataset).   
+```{r, eval = FALSE}
+awk  '$5 > 0.1 {print $2}' DISCOVERY_ASSOCIATION_FILE > DISCOVERY_COMMON_SNPS
+```
+where $5 is the MAF column in DISCOVERY_ASSOCIATION_FILE if included and $2 is the SNP column: **WARNING: THESE WILL VARY FROM DATASET TO DATASET**    
+
+How to select only high quality variants from imputation (INFO > 0.9) if the discovery data has this information. (If it doesn't, don't worry).    
+```{r, eval = FALSE}
+awk  '$6 > 0.9 {print $2}' DISCOVERY_ASSOCIATION_FILE > DISCOVERY_HIGHINFO_SNPS
+```
+where $6 is the INFO column in DISCOVERY_ASSOCIATION_FILE if included and $2 is the SNP column: **WARNING: THESE WILL VARY FROM DATASET TO DATASET**     
+
+How to select only SNPs (remove indels). 
+We need to use A1 and A2, which we will force to be either A,C,T,G
+```{r, eval = FALSE}
+awk  '$3!=/[ID]/ {print $2}' DISCOVERY_ASSOCIATION_FILE > DISCOVERY_NOINDELS
+```
+
+*You can wrap the commands above into one if the discovery data has this information for both using this command*:    
+```{r, eval = FALSE}
+awk  '($5 > 0.1)&&($6 > 0.9)&&($3!=/[ID]/) {print $2}' DISCOVERY_ASSOCIATION_FILE > DISCOVERY_HIGHINFO_COMMON_SNPS_NOINDELS
+```  
+
+To get a list of MHC region SNPs to be removed, run the following command: 
+```{r, eval = FALSE}
+awk  '($1 == 6)&&($3 > 25000000)&&($3 < 34000000) {print $2}' DISCOVERY_ASSOCIATION_FILE > DISCOVERY_MHC_SNPs
+```
+where $1 is the chromosome column, $3 is the base position in DISCOVERY_ASSOCIATION_FILE if included and $2 is the SNP column: **WARNING: THESE WILL VARY FROM DATASET TO DATASET**    
+The coordinates for the MHC are taken from the supplementary materials for the [PGC2 paper (page 17)](http://www.nature.com/nature/journal/v511/n7510/extref/nature13595-s1.pdf).      
+
+Then we do a two step process to get only the SNPs we are interested in the DISCOVERY_ASSOCIATION_FILE.     
+First keep the DISCOVERY_HIGHINFO_COMMON_SNPS_NOINDELS from DISCOVERY_ASSOCIATION_FILE.:
+```{r, eval = FALSE}
+awk 'NR==FNR{_[$1];next}($2 in _)' DISCOVERY_HIGHINFO_COMMON_SNPS_NOINDELS DISCOVERY_ASSOCIATION_FILE  > DISCOVERY_ASSOCIATION_FILE_HIGHINFO_COMMON_SNPS_ONLY
+```
+Change the $2 to be the SNP column in the DISCOVERY_ASSOCIATION_FILE: **WARNING: THESE WILL VARY FROM DATASET TO DATASET**      
+
+Check this has worked. . First head DISCOVERY_HIGHINFO_COMMON_SNPS_NOINDELS to get the first 10 SNPs in the file, and then use grep to search for the first SNP in the output file DISCOVERY_ASSOCIATION_FILE_HIGHINFO_COMMON_SNPS_ONLY, for example:    
+```{r, eval = FALSE}
+grep "rs13597346" DISCOVERY_ASSOCIATION_FILE_HIGHINFO_COMMON_SNPS_ONLY
+```
+Change the rs13597346 to the SNP you are looking for. If something gets printed to the screen, then that SNP is in the output. If nothing gets printed out, then the command has not worked. You can also do this to see if SNPs have been removed by comparing the DISCOVERY_ASSOCIATION_FILE and the DISCOVERY_ASSOCIATION_FILE_HIGHINFO_COMMON_SNPS_ONLY. You can do this by eye and head both files.   
+
+Second, remove the DISCOVERY_MHC_SNPs from DISCOVERY_ASSOCIATION_FILE_HIGHINFO_COMMON_SNPS_ONLY:   
+```{r, eval = FALSE}
+awk 'NR==FNR{_[$1];next}!($2 in _)' DISCOVERY_MHC_SNPs DISCOVERY_ASSOCIATION_FILE_HIGHINFO_COMMON_SNPS_ONLY  > DISCOVERY_ASSOCIATION_FILE_QCED
+``` 
+Change the $2 to be the SNP column in the DISCOVERY_ASSOCIATION_FILE: **WARNING: THESE WILL VARY FROM DATASET TO DATASET**    
+
+Again you can check this has worked. First head DISCOVERY_MHC_SNPs to get the first 10 SNPs in the file, and then use grep to search for the first SNP in the output file DISCOVERY_ASSOCIATION_FILE_QCED, for example:    
+```{r, eval = FALSE}
+grep "rs13597346" DISCOVERY_ASSOCIATION_FILE_HIGHINFO_COMMON_SNPS_ONLY
+```
+Change the rs13597346 to the SNP you are looking for. If nothing gets printed out, then the command *has* worked (remember we are REMOVING here). If something gets printed to the screen, then it hasn't worked. You can also do this to see if SNPs have been removed by using awk to look for SNPs in the MHC region in  DISCOVERY_ASSOCIATION_FILE_QCED using a command like this:
+```{r, eval = FALSE}
+awk  '($1 == 6)&&($3 > 25000000)&&($3 < 34000000) {print $2}' DISCOVERY_ASSOCIATION_FILE_QCED 
+```   
+If SNPs get printed to the screen than the command has not worked.
+
+
+### Clump SNPs
+This is to create an linkage equilibrium set of SNPs (meaning we are removing highly correlated SNPs to prevent them inflating our results). Clumping and pruning are not the same thing. Clumping can be thought of as informative pruning, where SNPs within high LD (LD  > 0.1) are removed while ensuring that the SNP with the lowest p-value is retained. See [here](http://pngu.mgh.harvard.edu/~purcell/plink/clump.shtml) for more information. 
+
+#### Adjusting column names for plink 
+Plink is rigid with the names of the columns it recognizes. There needs to be a column called SNP and a column called P, and these have to be uppercase.  The command below will alter the header line of the file to be uppercase:
+
+```{r, eval = FALSE}
+awk '{if (FNR == 1) print toupper($0); else print $0}' DISCOVERY_ASSOCIATION_FILE_QCED  > DISCOVERY_ASSOCIATION_FILE_QCED_newHEAD
+```
+
+The names can be altered using a sed command. For example, if the p-value columns is PVAL this can be altered to P with the following command:  
+```{r, eval = FALSE}
+sed '1s/PVAL/P/g' DISCOVERY_ASSOCIATION_FILE_QCED  > DISCOVERY_ASSOCIATION_FILE_QCED_newHEAD
+```     
+The above command can be amended to change the SNP column name as well. For example, changing the SNP column from markername to SNP with the following command:
+```{r, eval = FALSE}
+sed '1s/markername/SNP/g' DISCOVERY_ASSOCIATION_FILE_QCED  > DISCOVERY_ASSOCIATION_FILE_QCED_newHEAD
+```      
+
+These commands can also be piped together. So the first line become uppercase, pvalue and SNP column names changed.    
+```{r, eval = FALSE}
+awk '{if (FNR == 1) print toupper($0); else print $0}' DISCOVERY_ASSOCIATION_FILE_QCED | sed '1s/PVAL/P/g' | sed '1s/MARKERNAME/SNP/g'  > DISCOVERY_ASSOCIATION_FILE_QCED_newHEAD
+```   
+Notice in the piped command that markername is now MARKERNAME, as the first step uppercased all the words in the first line which includes markername and sed is casesensitive.   
+
+#### Clumping steps 
+```{r, eval = FALSE}
+plink --noweb --bfile TARGET_DATASET --clump DISCOVERY_ASSOCIATION_FILE_QCED  --clump-p1 1 --clump-p2 1 --clump-r2 0.1 --clump-kb 500 --out DISCOVERY_ASSOCIATION_CLUMPED
+```
+
+Again we will select only the SNP column from the results and then keep only these SNPs in our DISCOVERY_ASSOCIATION_FILE_QCED:
+```{r, eval = FALSE}
+gawk '$1!="NA" {print $3}' DISCOVERY_ASSOCIATION_CLUMPED.clumped > DISCOVERY_ASSOCIATION_CLUMPED.clumped_SNPs
+
+awk 'NR==FNR{_[$1];next}($2 in _)'  DISCOVERY_ASSOCIATION_CLUMPED.clumped_SNPs DISCOVERY_ASSOCIATION_FILE_QCED > DISCOVERY_ASSOCIATION_FILE_QCED_KEEPSNPS
+```
+Change the $2 to be the SNP column in the DISCOVERY_ASSOCIATION_FILE: **WARNING: THESE WILL VARY FROM DATASET TO DATASET**    
+
+We should now have a QC and clumped discovery summary statistics file.
+
+If multiple target or multiple discovery are being used, clumping should be run on each set of data. If using 3 discovery and 2 targets, 6 different clumping procedures would be run:     
+
+    * Discovery_1 with Target_1      
+    * Discovery_2 with Target_1   
+    * Discovery_3 with Target_1   
+    * Discovery_1 with Target_2      
+    * Discovery_2 with Target_2   
+    * Discovery_3 with Target_2    
+
+This is to ensure that the top SNP for each different result file is kept in your each of your different target data, and these will not be the same across different result files and targets.    
+ 
+### Prepare files for polygenic scoring
+We need to create a few different input files:  
+1. FILENAME.score file    
+2. FILENAME.pval file     
+3. FILENAME.ranges file     
+
+FILENAME.score file contains the SNP, Reference Allele, and effect size (beta or log of the odds ratio).      
+FILENAME.pval file contains the SNP and p-value.     
+FILENAME.ranges file contains the p-value ranges for thresholding.    
+
+Plink2 now lets you set the columns in the command line for polygenic scoring (see [here](https://www.cog-genomics.org/plink2/score)), so this step is nessacarily needed. However, if you need to log the odds ratio, than you need to create a new file as you can not tell plink to log the odds ratio on the command line. For this reason, the how-to will walk through the "old fashion" way.    
+
+For quantiative traits :    
+```{r, eval=FALSE}
+awk '{print $2,$4,$7}' DISCOVERY_ASSOCIATION_FILE_QCED_KEEPSNPS | grep -v NA > DISCOVERY.score
+awk '{print $2,$12}'  DISCOVERY_ASSOCIATION_FILE_QCED_KEEPSNPS | grep -v NA > DISCOVERY.pval
+```
+where $2 is the SNP column, $4 is the reference allele, $7 is the effect column and $12 is the p-value column: **WARNING: THESE WILL VARY FROM DATASET TO DATASET**     
+
+**FOR DISCRETE TRAITS : REMEMBER TO LOG THE ODDS RATIO**     
+If you are working with a DISCRETE trait, unix can log (natural log) the odds ratio for you, by running these commands:     
+```{r, eval=FALSE}
+awk '{print $2,$4,log($7)}' DISCOVERY_ASSOCIATION_FILE_QCED_KEEPSNPS | grep -v NA > DISCOVERY.score
+awk '{print $2,$12}'  DISCOVERY_ASSOCIATION_FILE_QCED_KEEPSNPS | grep -v NA > DISCOVERY.pval
+```
+
+The FILENAME.ranges can be created in a text editor and is just a text-tab delimited file of p-values thresholds (P~T~ is usually used to denote p-value thresholds). It has three column with no header row. The first column is the identifier, the second is the starting p-value, and the third is the ending pvalue to include in the threshold range. Threshold are usually nested and progressive (meaning they *all* start at 0).  Studies use a wide range of thresholds, and include different number of thresholds. Thresholds commonly included are P~T~ < 5×10^−8^, 1×10^−6^, 1×10^−4^, 0.001, 0.01, 0.05, 0.1, 0.2, 0.5, 1.    
+      
+However, the setting of these can depend on your discovery dataset, for example if your discovery dataset does not include many/any genome-wide significant assocaitions (P < 5×10^−8^), than it doesn't make sense to include this threshold. You can reduce the number of thresholds, however **ALWAYS** use more than one. The point of polygenic score analysis is to demonstrate a shared polygenic risk between traits, meaning that there is an increase in polygenic sharing (denoted by R^2^) with increasing P~T~. Seeing association at a single P~T~ and none of the others is indicative of false positive finding than any true shared polygenic risk between traits.      
+     
+Example of a FILENAME.ranges file:       
+![](/Users/katherine/Documents/Cardiff_University_Admin/how_tos/polygenic_scoring_howto/pt.png)   
+
+### PLINK - calculate polygenic scores      
+Use [plink2](https://www.cog-genomics.org/plink2/score) to calculate polygenic scores.     
+
+The vanilla version is just the following command:     
+```{r, eval = FALSE}
+plink --noweb --bfile TARGET_DATASET --score DISCOVERY.score --q-score-range FILENAME.ranges DISCOVERY.pval --out TARGET_scoredfrom_DISCOVERY
+```
+
+There are a few option that can be included:      
+
+ * sum | no-sum     
+ * no-mean-imputation | center     
+ * include-cnt    
+
+sum | no-sum : the default for plink2 is to calculate the average score. By include 'sum' after the --score DISCOVERY.score (to be --score DISCOVERY.score sum), the output score would be the sum and not the average. Sum is the default is using dosage data, so if you are using dosage data and want the average you need to include 'no-sum' in the same fashion that sum was used (--score DISCOVERY.score no-sum).  *'sum' and 'no-sum' can not be called together.*     
+
+no-mean-imputation | center : include 'no-mean-imputation' means that missing observations are not included in the calculations (the default is to make the proportaional to the allele frequency) (--score DISCOVERY.score no-mean-imputation). 'center' shifts all scores to have a mean of 0 (--score DISCOVERY.score center). *'no-mean-imputation' and 'center' can not be called together.*     
+
+include-cnt : for dosage data to have the count column included in the output.    
+
+I would suggest using 'no-mean-imputation' so that missing observation are treated as missing and not imputed to the allele frequency for that variant. This would change the vanilla command to this:
+```{r, eval = FALSE}
+plink --noweb --bfile TARGET_DATASET --score DISCOVERY.score no-mean-imputation --q-score-range FILENAME.ranges DISCOVERY.pval --out TARGET_scoredfrom_DISCOVERY
+```
+
+This creates a number of output files, which depends on the number of thresholds that were included.    
+These files contain scores for the discovery data for each individual in the target datset.    
+
+### Association   
+
+Analysis is done in R. This is step 8 from the top (*8. Regression analysis: y = phenotype, x = profile score. Compare variance explained from the full model (with x) compared to a reduced model (covariates only). Check the sign of the regression coefficient to determine if the relationship between y and x is in the expected direction.*)
+
+Load the require packages :     
+Don't change this bit!
+```{r, eval = FALSE}
+getRversion()    
+
+# required packages -- will only install if they are not already installed
+list.of.packages <- c("plyr", "stringr", "dplyr", "tidyr", "reshape2", "ggplot2", "scales", "data.table")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+# loads the required packages
+lapply(list.of.packages, require, character.only = TRUE)
+```
+
+You need to tell R where the data is on your computer. This means giving R the path to the data. 
+```{r, eval = FALSE}
+# set working directory
+setwd("WHERE_THE_DATA_IS")
+```
+
+Load polygenic files. 
+```{r, eval = FALSE}
+### CHANGE the number '1:7' to the number of polygenic files that you have (depends on the number of thresholds used)
+### if you called the thresholds, S0, S1, S2, S3 - then this would be set as 0:3
+### CHANGE 'TARGET_scoredfrom_DISCOVERY' to what the output from PLINK was called
+my_files = paste0("TARGET_scoredfrom_DISCOVERY.S", 1:7, ".profile")
+my_data <- lapply(my_files, read.table, header=TRUE) 
+names(my_data) <- str_replace(my_files, pattern = ".profile", replacement = "")
+for (i in 1:7) {
+    my_data[[i]] <- my_data[[i]][,c(1,2,6)]
+    colnames(my_data[[i]]) <- c("FID", "IID", paste("SCORE", i, sep=""))
+}
+all_prs <- join_all(my_data, by=c("FID", "IID"), type='left')
+```
+This creates a dataset that contains all the score for each individual. This will be the data frame that we use to run all of our regression models. 
+
+Load the phenotypic data. The IDs for individuals in this file **MUST** match those in the genotype file **EXACLTY**. It is easiest if the data also includes any covariates that will be included in the analysis (age, sex, total_brain_volume, etc.). There are a variety of ways to load this data depending on what format it is in:     
+```{r, eval = FALSE}
+# Data is a text tab delimited file (extension .txt)
+phenotype_data <- read.table("pheno.txt")
+
+# Data is a comma seperated file (extension .csv)
+phenotype_data <- read.table("pheno.csv")
+
+# Data is an excel file (extension xlsx)
+install.packages("readxl")
+library(readxl)
+phenotype_data <- read_excel("pheno.xlsx", sheet = 1)
+# you need to tell it which sheet in the workbook it is that you want to import, here it is the first sheet (sheet = 1)
+
+# Data is in Stata format (extension dta)
+install.packages("haven")
+library(haven)
+phenotype_data <- read_dta("pheno.dta")
+
+# OR foreign package can be used - Data is in Stata format (extension dta)
+install.packages("foreign")
+library(foreign)
+phenotype_data <- read.dta("pheno.dta")
+
+# Data is in SPSS format (extension .sav)
+install.packages("haven")
+library(haven)
+phenotype_data <- read_sav("pheno.sav")
+
+# OR foreign package can be used - Data is in SPSS format (extension .sav)
+install.packages("foreign")
+library(foreign)
+phenotype_data <- read.spss("pheno.sav", to.data.frame=TRUE, use.value.labels = FALSE)
+```
+
+Merge the phenotype and polygenic dataframe together.  In the example it is merge on two columns, FID and IID, however this can be changed to only match on one column as long as that single column is a unique identifier. This is true for some sample but not all, particular for samples that have family information which are created to require both FID (family ID) and IID (individual ID) for uniqueness.    
+```{r, eval = FALSE}
+DATA <- join_all(list(all_prs, phenotype_data), by=c("FID", "IID"), type='inner')
+```
+
+Run regression.     
+
+This will be done by iterating over two list, the first is the polygenic scores and the second is the phenotypes of interest. Two different regression models are run. The first is the "full model" which includes the phenotype and all covariates (sex, age, total_brain_volume, population stratification principal components, etc.), and the second is the "reduced model" which included only the covariates (*does not included the phenotype of interest*). The R^2^ from the two models are substracted from each other to estimate the R^2^ attributable to just the phenotype of interest. This loop can not be performed if the phenotypes vary by type (quantitative, discrete, etc.). If you have multiple types of phenotypes, they need to seperated into two different loops to ensure the correct regression model is called for each phenotype of interest.  
+
+Remember also that R^2^ for logistic regressions are more complicated than linear regressions, and there are a variety of different ways to calculate "pseudo"-R^2^ for logistic regression which will lead to different results depending on which one you choose. Most studies use Nagelkerke's R^2^, which can use this [R command](http://minato.sip21c.org/msb/man/Nagelkerke.html) or [this one](http://rcompanion.org/rcompanion/e_06.html). 
+```{r, eval = FALSE}
+score_list <- colnames(all_prs[,-1:-2])
+# change the list below to be for the phenotypes
+phenotypes <- list("pheno1", "pheno2")
+
+# dont' change obj it makes the loop output a dataframe with the regression results
+obj <- data.frame(test=0, score=0, estimate=0, SE=0, tvalue=0, p=0, r.squared=0)
+
+# this example if for a linear regression (the phenotype of interest is a quantiative trait)
+# is using a discrete phenotype, a logistic regression needs to be run, and the code altered from 'lm' to 'glm' including the argument of 'family = binomial'
+# alterations for the calculation of R2 will also need to be made using the command highlighted above
+for (i in score_list) {
+  for (j in phenotypes) {
+    fit <- lm(DATA[,j] ~ DATA[,i] + COVARIATES, data=DATA)
+    fit1 <- lm(DATA[,j] ~  COVARIATES, data=DATA)
+    tmp <- coef(summary(fit))
+    tmp2 <- summary(fit)
+    hold <- summary(fit1)
+    true_r2 <- tmp2$r.squared - hold$r.squared
+    tmp3 <- c(j,i,tmp[2,], true_r2)
+    obj <- rbind(obj, tmp3)
+  }
+}
+
+# this is a clean-up step - do not change
+results <- obj[which(obj$score %in% score_list),]
+
+# CHANGE :  FILENAME.txt to what you want the results information to be called
+write.table(results, file = "FILENAME.txt", row.names = F, quote = F)
+```
+This will return on data frame called results which contains the results from the regression for the phenotypes of interested with the corrected R^2^ (R^2^ of the full model minus R^2^ of the reduced model). This table is exported using the write.table command to the working directory (the one set by setwd when R first started).    
+
+### Make Plot    
+
+Next we are going to make a plot of the data.      
+
+First we have to reformat the data to the required input for the plot, and then make the plot.    
+```{r, eval = FALSE}
+# Don't change the code below -- this reformats the data so that it can be inputted to the plot properly
+
+# ensure that the pvalue and r2 columns are classified as numeric by R
+results$p <- as.numeric(results$p)
+results$r2_dir <- 100 * (as.numeric(results$r.squared) *
+                             (sign(as.numeric(results$estimate))))
+
+### reformat data for plots 
+results_p <- results[,c(1,2,6)]
+results_r2 <- results[,c(1,2,8)]
+results_p_wide <- dcast(results_p, score ~ test , value.var="p")
+results_r2_wide <- dcast(results_r2, score ~ test , value.var="r2_dir")
+```
+
+Because the some parameters of the plot may need to be altered, it is likely that you will have to the plot, look at it, and then alter some of the code to ensure the best aesthetic look (alter axis limits, change location of text, etc.). I've tried to highlight where these are in the code to best help with the alterations.   
+```{r, eval = FALSE}
+### make plot
+### CHANGE PLOTNAME to the name you want for the plot
+### the width and height can be adjusted to optimise the aesthetic 
+tiff("PLOTNAME.tiff", 
+     res = 300, compression = c("lzw"), 
+     width = 3000, height = 1500)
+
+# do not change the code below
+par(mfrow = c(1,1), "mar" = c(1.5, 3.25, 2.5, 2.5))
+mycol = heat.colors(dim(results_r2_wide)[1]);
+
+## npth = number of  p-thresholds
+# CHANGE this to the number of p-threshold you used
+npth = 10 
+
+### results_r2_wide[,c(2:9)] takes the number of columns with data
+### CHANGE : this will vary depending on how many phenotypes of interested you used and would need to be alter 
+### should always started at column 2, since the first column are labels for the threshold
+### the last column will be 1 plus the number of phenotypes used (here it was 8)
+plotmatrix <- as.matrix(results_r2_wide[,c(2:9)])
+
+# do not change the code below
+maxp= max(plotmatrix, na.rm = T)
+minp= min(plotmatrix, na.rm = T)
+minp = min(0, minp)
+
+# CHANGE :  the title of the plot is set by "main = " - change PLOT TITLE to the title that you want 
+# CHANGE : ylim sets the limits for the y-axis - depending on the results of your data, thic may need to be altered to make sure everything fits -- currently it is looking at very low R2 values (0.4%) - and allows for bidirectional effects, which might not always be needed if you don't have positive and negative effects (things that increase and decrease risk depending on phenotype).
+rip <- barplot(plotmatrix, beside = T, legend = F, col = mycol, 
+               ylim = c(-0.4,0.4), 
+               main = "PLOT TITLE", 
+               cex.main = 1, cex.names = 0.7, 
+               axisnames = F, ylab = "",las = 1)
+
+# this may need to be altered to ensure the location of "R-squared (%)" is correct on the plot - this will only be the case if the dimensions of the plot have been alter
+# line and padj alter the located of the R-squared
+mtext("R-squared (%)", side = 2, cex = 1, las = 1, 
+      line = -3, padj = -18.5)
+
+# CHANGE : the labels are the names of the phenotypes of interest. If multiple phenotypes have been used, make sure you are putting them in the SAME order as they are in the data
+# order is determined by the columns of the data frame "results_r2_wide" with the first column being the first print and so on
+# CHANGE : the location of the labels on the y-axis is set with "y = " - and this can be changed to have them closer or futher away from the x-axis.   
+text(x = colMeans(rip), offset = 1.5, pos = 1, xpd = T , cex = 0.8, srt = 0, 
+     y = -0.3,
+     labels = c("PHENO1", "PHENO2", "PHENO3", "PHENO4"))
+
+# CHANGE : The labels below allow for bidirectional effects -- if you don't have bidirection effect just REMOVE these lines.  
+# The text can be change to state with it "Increases" or "Decreases" risk, but careful thought must be taken when deciding this effect, keeping in the mind the information from original discovery dataset and the direction of effect within that dataset.  
+# location of the text can be altered using padj
+mtext("(Positive\nBeta)", 
+      padj = -1.5,
+      side = 4, line = -1, cex = 0.7, las = 1)
+mtext("(Negative\nBeta)", 
+      padj = 1.5,
+      side = 4, line = -1, cex = 0.7, las = 1)
+
+# do not change this
+my.cex = .5
+for (cc in 2:9) {
+    sig = results_p_wide[,cc];
+    sigo = results_p_wide[,cc];
+    sig = ifelse(sigo < 0.05, 
+                 paste("p =", scientific(sigo, digits = 2), sep = " "), "")
+    ccl = (cc - 2) * npth
+    ripx = rip [(ccl+1):(ccl+npth)]
+    sign = ifelse (results_r2_wide[,cc] < 0, 0, results_r2_wide[,cc])
+    text(x = ripx, y = sign, sig, srt = 80, cex = 0.7, adj = c(-0.1,0))
+}
+
+# CHANGE : the legend states which pvalue thresholds were used - alter this to correctly reflect the thresholds that were used.   
+legend("top", title = "P-value threshold in training data", 
+       legend = c("p<0.00001", "p<0.0001", "p<0.001", "p<0.01", "p<0.05",
+                  "p<0.1","p<0.2", "p<0.3", "p<0.4", "p<0.5"),  
+       fill = mycol, ncol = length(results_r2_wide[,1]), cex =.7)
+
+dev.off()
+```
+This should create a plot that looks like [this](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4838093/figure/F1/), or like [this](http://www.nature.com/mp/journal/v21/n8/fig_tab/mp2015143f1.html#figure-title). The plot will *NOT* pop up in R, but be saved as a tiff in the working directory (set above by setwd command).    
+
+## Correction for multiple testing    
+
+There are many ways to correct for multiple testing using FWER, FDR or running permutations. There is no consensus about correction for multiple testing in polygenic scoring analyses and typically no correction-based methods (such as false-discovery or Bonferroni) are used. However, multiple testing still needs to be to addressed, therefore it is recommended to apply post-hoc permutation correction for associations reaching nominal levels of significance.     
+
+Permutation correction is a well-established approach in genetic association analyses [(Sham & Purcell, 2014)](http://www.nature.com/nrg/journal/v15/n5/full/nrg3706.html). Sham & Purcell (2014) state that: *“the permutation procedure is a robust but computationally intensive alternative to the Bonferroni correction in the face of dependent tests.”* Dependents are exactly what occures in polygenic scoring, where the p-value thresholds are correlated (the nested progressive model). Because of the nature of permutations, this correlation structure does not effect the creation of the empirical distribution. The relationship between the polygenic score and phenotypes is completed removed, as the phenotype is shuffled and randomly assigned. This is repeated **10,000 times**, creating an *empirical distribution of p-values*, which may be thought of a distribution of potential null hypothesis results, and then asks if the true result is seen more often than expected by chance.       
+
+Data need for permutation analysis is the data what went into the regression.  Permutations only need to be done on significant results, as it does not make sense to derived an adjusted p-value for things that were not significant to begin with.   
+
+```{r, eval = FALSE}
+# libraries require for permutation analysis
+library(permute)
+library(mosaic)
+library(coin)
+
+# Data being used is DATA from above in the association analysis section where the regression was run
+
+# numsim is the number of simulations to run
+numsim = 10000
+
+# this is important -- setting a seed makes this reproducible and this should NOT be changed 
+set.seed(12345)
+##############################################################################
+### PHENO1: SCORE4, SCORE5, SCORE6, SCORE7
+
+for (i in c("SCORE4", "SCORE5", "SCORE6", "SCORE7")) {
+    res = do(numsim) * summary(lm(shuffle(PHENO1) ~ DATA[,i] + COVARIATES, 
+                        data=DATA))$coefficients[, 4]
+    fit  <- lm(PHENO1 ~ DATA[,i] + COVARIATES, data=DATA)
+    obs <- summary(fit)$coefficients[2, 4]
+    pvalue = sum(abs(res[,2]) < abs(obs)) / numsim
+    print(c("PHENO1",i,pvalue))
+}
+```
+This will print to the screen the permuted p-value for each SCORE for that PHENO. This is the corrected p-value.    
+
+If the p-value output to the screen is 0, this means that there were no permutations which had a more extreme p-value than the other that you observed. Therefore the p-value is p<(1/number of simulations), in the example above this would be p<1e-4.    
+
+## Power for Polygenic Risk Score
+Power can be calculated for polygenic risk score analysis using an R code made available by Frank Dudbridge (found [here](https://sites.google.com/site/fdudbridge/software/)), which is from [this](http://journals.plos.org/plosgenetics/article?id=10.1371/journal.pgen.1003348) and [this](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4573448/) paper. The R code is very straightforward and easy to use, plus there is a shiny app that allows the R code to be run as a web app.  
+
+
